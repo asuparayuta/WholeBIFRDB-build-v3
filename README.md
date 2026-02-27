@@ -1,62 +1,63 @@
 # WholeBIF-RDB Pipeline
 
-WholeBIF-RDB（Whole Brain Interconnection Fluency - Research Database）のデータ取り込みパイプライン。Google Spreadsheet から新規の神経接続データを受け取り、信頼度スコア（PDER, CSI, CR）を計算して BDBRA CSV を生成する。
+Data ingestion pipeline for WholeBIF-RDB (Whole Brain Interconnection Fluency - Research Database). Takes new neural connectivity records from Google Spreadsheet exports, computes credibility scores (PDER, CSI, CR), and outputs BDBRA CSV ready for database import.
 
-## このリポジトリの位置づけ
+## What This Pipeline Does
 
-WholeBIF-RDB は脳の神経接続を記録したデータベースで、各レコードに **Credibility Rating (CR)** という信頼度スコアが付与されている。CR は以下の6つのスコアの積で計算される。
+WholeBIF-RDB is a database of neural projections in the brain. Each record carries a **Credibility Rating (CR)** — a composite reliability score computed as the product of six component scores:
 
 ```
-CR = Source Region Score × Receiver Region Score × CSI × Literature Type Score × Taxon Score × PDER
+CR = Source Region Score x Receiver Region Score x CSI x Literature Type Score x Taxon Score x PDER
 ```
 
-このパイプラインは、下図の赤枠部分に対応する。
+This pipeline handles the red-boxed portion of the architecture diagram below:
 
 ```
 Google Spreadsheet (wbConnections / wbReferences)
-        │
-        ▼
-┌────────────────────────────────────┐
-│  manual_to_bdbra_converter.py      │ ← このリポジトリ
-│    ├── schema.py                   │
-│    ├── credibility_calculator.py   │
-│    └── pipeline.py                 │
-└────────────────────────────────────┘
-        │
-        ▼
-   BDBRA CSV  →  import_bdbra_into_wholebif.py  →  PostgreSQL
+        |
+        v
++------------------------------------+
+|  manual_to_bdbra_converter.py      |  <-- this repository
+|    +-- schema.py                   |
+|    +-- credibility_calculator.py   |
+|    +-- pipeline.py                 |
++------------------------------------+
+        |
+        v
+   BDBRA CSV  ->  import_bdbra_into_wholebif.py  ->  PostgreSQL
 ```
 
-## ディレクトリ構成
+## Directory Structure
 
 ```
 .
-├── src/                         ソースコード
-│   ├── schema.py                  データ型定義・バリデーション（344行）
-│   ├── credibility_calculator.py  PDER・CSI・CR計算（307行）
-│   ├── manual_to_bdbra_converter.py  CSV変換コンバータ（398行）
-│   └── pipeline.py                オーケストレータ（226行）
-│
-├── tests/                       テスト（99件、全件合格）
-│   ├── conftest.py                共有フィクスチャ
-│   ├── test_credibility.py        信頼度計算テスト（45件）
-│   ├── test_converter.py          コンバータテスト（31件）
-│   └── test_pipeline.py           統合テスト（23件）
-│
-├── tools/                       スタンドアロンツール
-│   ├── score_pder_with_claude_api.py   PDER一括スコアリング（Claude API）
-│   └── score_citation_sentiment.py     CSI一括スコアリング（Semantic Scholar + Claude API）
-│
-├── docs/                        ドキュメント
-│   ├── test_design.md             テスト設計書（設計意図・全件解説）
-│   └── test_results.md            テスト実行結果報告書
-│
-├── data/                        データ（.gitignore対象、ローカルで配置）
-├── pyproject.toml               プロジェクト設定
-└── README.md                    この文書
++-- src/                         Source code
+|   +-- schema.py                  Data types and validation (344 lines)
+|   +-- credibility_calculator.py  PDER, CSI, and CR computation (307 lines)
+|   +-- manual_to_bdbra_converter.py  CSV converter (398 lines)
+|   +-- pipeline.py                Orchestrator (226 lines)
+|
++-- tests/                       Tests (99 tests, all passing)
+|   +-- conftest.py                Shared fixtures
+|   +-- test_credibility.py        Credibility scoring tests (45 tests)
+|   +-- test_converter.py          Converter tests (31 tests)
+|   +-- test_pipeline.py           Integration tests (23 tests)
+|
++-- tools/                       Standalone tools
+|   +-- score_pder_with_claude_api.py   Batch PDER scoring (Claude API)
+|   +-- score_citation_sentiment.py     Batch CSI scoring (Semantic Scholar + Claude API)
+|
++-- docs/                        Documentation
+|   +-- architecture.md            Pipeline architecture diagram
+|   +-- test_design.md             Test design document (design rationale for all 99 tests)
+|   +-- test_results.md            Test execution report
+|
++-- data/                        Data directory (CSV files gitignored; place locally)
++-- pyproject.toml               Project configuration
++-- README.md                    This file
 ```
 
-## セットアップ
+## Setup
 
 ```bash
 git clone https://github.com/<your-org>/wholebif-rdb-pipeline.git
@@ -64,11 +65,11 @@ cd wholebif-rdb-pipeline
 pip install pytest pytest-cov requests
 ```
 
-## 使い方
+## Usage
 
-### パイプライン実行（ヒューリスティックモード）
+### Pipeline Execution (Heuristic Mode)
 
-外部 API を使わず、ルールベースで PDER・CSI を計算する。テストやドライランに向く。
+Uses rule-based scoring with no external API calls. Suitable for testing and dry runs.
 
 ```bash
 python src/pipeline.py \
@@ -80,9 +81,9 @@ python src/pipeline.py \
   --dry-run
 ```
 
-### パイプライン実行（高精度モード）
+### Pipeline Execution (High-Accuracy Mode)
 
-Claude API で PDER を、Semantic Scholar API で CSI を計算する。本番運用向け。
+Uses Claude API for PDER and Semantic Scholar API for CSI. For production use.
 
 ```bash
 export ANTHROPIC_API_KEY="your-key"
@@ -94,39 +95,39 @@ python src/pipeline.py \
   --project-id "PROJECT01"
 ```
 
-### スタンドアロンツール
+### Standalone Tools
 
-既存の wbConnections CSV に対して PDER や CSI を一括スコアリングする場合：
+For batch scoring an existing wbConnections CSV:
 
 ```bash
-# PDER 一括スコアリング（Claude API 使用）
+# Batch PDER scoring (Claude API)
 export ANTHROPIC_API_KEY="your-key"
 python tools/score_pder_with_claude_api.py \
   -i data/WholeBIF_RDBv2_wbConnections.csv \
   -o data/WholeBIF_RDBv2_scored.csv
 
-# CSI 一括スコアリング（Semantic Scholar + Claude API 使用）
+# Batch CSI scoring (Semantic Scholar + Claude API)
 python tools/score_citation_sentiment.py \
   -i data/WholeBIF_RDBv2_wbConnections.csv \
   -r data/WholeBIF_RDBv2_wbReferences.csv \
   -o data/WholeBIF_RDBv2_scored.csv
 ```
 
-## テスト
+## Tests
 
 ```bash
-# 全99件実行
+# Run all 99 tests
 python -m pytest tests/ -v
 
-# カバレッジ付き
+# With coverage report
 python -m pytest tests/ --cov=src --cov-report=term-missing
 
-# 特定のテストだけ
+# Run specific tests
 python -m pytest tests/test_credibility.py::TestCRCalculation -v
 python -m pytest tests/ -k "pder" -v
 ```
 
-### テスト結果（2026-02-27 時点）
+### Test Results (as of 2026-02-27)
 
 ```
 99 passed in 0.41s
@@ -138,39 +139,39 @@ src/credibility_calculator.py    53%
 TOTAL                            74%
 ```
 
-テスト設計の詳細は [docs/test_design.md](docs/test_design.md)、実行結果の全ログは [docs/test_results.md](docs/test_results.md) を参照。
+See [docs/test_design.md](docs/test_design.md) for design rationale and [docs/test_results.md](docs/test_results.md) for full execution logs.
 
-## CR 計算の検証
+## CR Calculation Verification
 
-実データ（WholeBIF_RDBv2）との照合でパイプラインの計算精度を確認済み。
+Pipeline calculations have been verified against real data from WholeBIF_RDBv2:
 
-| 参照行 | スコア6つ | 期待 CR | 計算結果 |
-|--------|----------|--------|---------|
-| Row 176 | (1, 1, 0.95, 1, 0.5, 0.4) | 0.190 | ✓ 一致 |
-| Row 319 | (1, 1, 0.95, 1, 0.6, 0.8) | 0.456 | ✓ 一致 |
-| Row 181 | (1, 1, 0.95, 0.5, 0.5, 0.3) | 0.0712 | ✓ 一致 |
+| Row | Scores (6 components) | Expected CR | Computed |
+|-----|----------------------|-------------|----------|
+| Row 176 | (1, 1, 0.95, 1, 0.5, 0.4) | 0.190 | Match |
+| Row 319 | (1, 1, 0.95, 1, 0.6, 0.8) | 0.456 | Match |
+| Row 181 | (1, 1, 0.95, 0.5, 0.5, 0.3) | 0.0712 | Match |
 
-## PDER スコア体系
+## PDER Score Reference
 
-計測手法ごとの PDER スコア範囲。方向性特定能力の高い手法ほど高スコア。
+PDER scores by measurement method category. Methods with stronger directional evidence score higher.
 
 ```
-手法カテゴリ               スコア範囲    既存データでの件数
-─────────────────────────────────────────────────────
-Various tracing            0.85-0.95     200行
-Tracer study               0.80-0.95    1,094行
-Electrophys / Opto/Chemo   0.55-0.75    2,266行
-DTI / tractography         0.35-0.55      815行
-fMRI / rs-fMRI             0.30-0.50    1,500+行
-Review / Unspecified       0.20-0.40   18,159行
-Textbook                   0.15-0.35       54行
+Method Category             Score Range   Rows in Existing Data
+-------------------------------------------------------------
+Various tracing             0.85-0.95       200
+Tracer study                0.80-0.95     1,094
+Electrophys / Opto/Chemo    0.55-0.75     2,266
+DTI / tractography          0.35-0.55       815
+fMRI / rs-fMRI              0.30-0.50     1,500+
+Review / Unspecified        0.20-0.40    18,159
+Textbook                    0.15-0.35        54
 ```
 
-## ライセンス
+## License
 
 MIT License
 
-## 関連リソース
+## Related Resources
 
-- [WholeBIF-RDB プロジェクト](https://wholebif.org)（日本大学）
-- [BDBRA フォーマット仕様](https://wholebif.org/bdbra)
+- [WholeBIF-RDB Project](https://wholebif.org) (Nihon University)
+- [BDBRA Format Specification](https://wholebif.org/bdbra)
