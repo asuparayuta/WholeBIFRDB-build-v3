@@ -1,231 +1,176 @@
+# WholeBIF-RDB Pipeline
+
+WholeBIF-RDB（Whole Brain Interconnection Fluency - Research Database）のデータ取り込みパイプライン。Google Spreadsheet から新規の神経接続データを受け取り、信頼度スコア（PDER, CSI, CR）を計算して BDBRA CSV を生成する。
+
+## このリポジトリの位置づけ
+
+WholeBIF-RDB は脳の神経接続を記録したデータベースで、各レコードに **Credibility Rating (CR)** という信頼度スコアが付与されている。CR は以下の6つのスコアの積で計算される。
+
+```
+CR = Source Region Score × Receiver Region Score × CSI × Literature Type Score × Taxon Score × PDER
+```
+
+このパイプラインは、下図の赤枠部分に対応する。
+
+```
+Google Spreadsheet (wbConnections / wbReferences)
+        │
+        ▼
+┌────────────────────────────────────┐
+│  manual_to_bdbra_converter.py      │ ← このリポジトリ
+│    ├── schema.py                   │
+│    ├── credibility_calculator.py   │
+│    └── pipeline.py                 │
+└────────────────────────────────────┘
+        │
+        ▼
+   BDBRA CSV  →  import_bdbra_into_wholebif.py  →  PostgreSQL
+```
+
+## ディレクトリ構成
+
+```
+.
+├── src/                         ソースコード
+│   ├── schema.py                  データ型定義・バリデーション（344行）
+│   ├── credibility_calculator.py  PDER・CSI・CR計算（307行）
+│   ├── manual_to_bdbra_converter.py  CSV変換コンバータ（398行）
+│   └── pipeline.py                オーケストレータ（226行）
+│
+├── tests/                       テスト（99件、全件合格）
+│   ├── conftest.py                共有フィクスチャ
+│   ├── test_credibility.py        信頼度計算テスト（45件）
+│   ├── test_converter.py          コンバータテスト（31件）
+│   └── test_pipeline.py           統合テスト（23件）
+│
+├── tools/                       スタンドアロンツール
+│   ├── score_pder_with_claude_api.py   PDER一括スコアリング（Claude API）
+│   └── score_citation_sentiment.py     CSI一括スコアリング（Semantic Scholar + Claude API）
+│
+├── docs/                        ドキュメント
+│   ├── test_design.md             テスト設計書（設計意図・全件解説）
+│   └── test_results.md            テスト実行結果報告書
+│
+├── data/                        データ（.gitignore対象、ローカルで配置）
+├── pyproject.toml               プロジェクト設定
+└── README.md                    この文書
+```
+
+## セットアップ
+
+```bash
+git clone https://github.com/<your-org>/wholebif-rdb-pipeline.git
+cd wholebif-rdb-pipeline
+pip install pytest pytest-cov requests
+```
+
+## 使い方
+
+### パイプライン実行（ヒューリスティックモード）
+
+外部 API を使わず、ルールベースで PDER・CSI を計算する。テストやドライランに向く。
+
+```bash
+python src/pipeline.py \
+  -c data/new_connections.csv \
+  -r data/new_references.csv \
+  -o ./output \
+  --contributor "YourName" \
+  --project-id "PROJECT01" \
+  --dry-run
+```
+
+### パイプライン実行（高精度モード）
+
+Claude API で PDER を、Semantic Scholar API で CSI を計算する。本番運用向け。
+
+```bash
+export ANTHROPIC_API_KEY="your-key"
+python src/pipeline.py \
+  -c data/new_connections.csv \
+  -r data/new_references.csv \
+  -o ./output \
+  --contributor "YourName" \
+  --project-id "PROJECT01"
+```
+
+### スタンドアロンツール
+
+既存の wbConnections CSV に対して PDER や CSI を一括スコアリングする場合：
+
+```bash
+# PDER 一括スコアリング（Claude API 使用）
+export ANTHROPIC_API_KEY="your-key"
+python tools/score_pder_with_claude_api.py \
+  -i data/WholeBIF_RDBv2_wbConnections.csv \
+  -o data/WholeBIF_RDBv2_scored.csv
 
-    # BDBRA-build-v2 — Build & Data Ingestion Toolkit
-
-    > End-to-end toolkit for building **BDBRA** (Brain Database for Brain Reference Architecture) and ingesting connectivity evidence into a relational database, with a minimal **Gradio** app for browsing.
-
-    This README covers dependencies, local & Docker setup, database initialization, CSV/Sheets imports, typical workflows, and troubleshooting. All comments and docs are standardized to **English** for collaboration.
-
-    ---
-
-    ## Features
-
-    - **PostgreSQL 16**-ready DDL and migration scripts
-    - Ingestion pipelines: CSV & Google Sheets → DB (idempotent upsert)
-    - Normalized tables aligned with WholeBIF/WholeBIF‑RDB conventions
-    - Gradio-based lightweight UI for querying circuits, connections, references, evidence, and scores
-    - Reproducible env (conda/Poetry) and **Docker Compose** support
-    - Comment policy & i18n: English-only
-
-    ---
-
-    ## Repository Layout
-
-    See `FILES.md` for the full tree. A condensed view:
-
-    ```text
-    BDBRA-build-v2_clean/
-└── BDBRA-build-v2
-    ├── dhba
-    │   └── BrainRegions.csv
-    ├── sample
-    │   ├── 10519872_citations_refaware_basic.csv
-    │   ├── PMC12376052.txt
-    │   ├── reemergent_tremor_citation_sentiment_demo.csv
-    │   └── sample_BDBRA.xlsx
-    ├── src
-    │   ├── hav_pubmed
-    │   │   ├── harvest_pubmed_projections_pro_nofulltext_fast.py
-    │   │   ├── harvest_pubmed_projections_pro_nofulltext_fast_split_2.py
-    │   │   └── harvest_pubmed_projections_pro_v2.py
-    │   ├── neural_projection_bundle
-    │   │   ├── tools
-    │   │   │   ├── html_text.py
-    │   │   │   └── pdf_text.py
-    │   │   ├── batch_llm_pubmed10_ncbi.py
-    │   │   ├── batch_pubmed_until_target.py
-    │   │   ├── batch_pubmed_until_target_history.py
-    │   │   ├── batch_pubmed_until_target_sharded.py
-    │   │   ├── doi_utils.py
-    │   │   ├── llm_extract_single.py
-    │   │   ├── method_lexicon.py
-    │   │   ├── NeuralProjection_Colab.ipynb
-    │   │   └── prompts_llm.py
-    │   ├── relaiblity_score
-    │   │   ├── citation_sentiment_prod_plus_transformers.ipynb
-    │   │   ├── citation_sentiment_refaware_basic_v2.ipynb
-    │   │   └── reemergent_tremor_citation_sentiment_demo.ipynb
-    │   ├── vis_tool
-    │   │   └── gradio_wholebif_query_app_flexpair_public_v2_fix2.py
-    │   └── extract_bandle
-    ├── LICENSE
-    └── README.md
-    ... (see FILES.md for the full tree)
-    ```
+# CSI 一括スコアリング（Semantic Scholar + Claude API 使用）
+python tools/score_citation_sentiment.py \
+  -i data/WholeBIF_RDBv2_wbConnections.csv \
+  -r data/WholeBIF_RDBv2_wbReferences.csv \
+  -o data/WholeBIF_RDBv2_scored.csv
+```
 
-    ---
+## テスト
 
-    ## 1. Requirements
+```bash
+# 全99件実行
+python -m pytest tests/ -v
 
-    ### Option A: Local (Python 3.11+)
-    - Python 3.11 (3.10 works in most cases)
-    - PostgreSQL 16 (or compatible managed instance)
-    - (Recommended) `psql` client, `libpq` headers
-    - Conda or Poetry
+# カバレッジ付き
+python -m pytest tests/ --cov=src --cov-report=term-missing
 
-    ### Option B: Docker
-    - Docker 24+
-    - Docker Compose v2+
+# 特定のテストだけ
+python -m pytest tests/test_credibility.py::TestCRCalculation -v
+python -m pytest tests/ -k "pder" -v
+```
 
-    ---
+### テスト結果（2026-02-27 時点）
 
-    ## 2. Quick Start (Docker)
+```
+99 passed in 0.41s
 
-    ```bash
-    cp .env.example .env
-    # Edit credentials:
-    # POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB
-    # APP_HOST, APP_PORT
-    # Optional: GOOGLE_SHEETS_* / OPENAI_*
+src/schema.py                    99%
+src/manual_to_bdbra_converter.py 73%
+src/pipeline.py                  69%
+src/credibility_calculator.py    53%
+TOTAL                            74%
+```
 
-    docker compose up -d --build
+テスト設計の詳細は [docs/test_design.md](docs/test_design.md)、実行結果の全ログは [docs/test_results.md](docs/test_results.md) を参照。
 
-    # Run migrations and seed
-    docker compose exec app python scripts/db_migrate.py
-    docker compose exec app python scripts/seed_demo.py
+## CR 計算の検証
 
-    # Open UI
-    # http://localhost:${APP_PORT:-7860}
-    ```
+実データ（WholeBIF_RDBv2）との照合でパイプラインの計算精度を確認済み。
 
-    Stop stack:
+| 参照行 | スコア6つ | 期待 CR | 計算結果 |
+|--------|----------|--------|---------|
+| Row 176 | (1, 1, 0.95, 1, 0.5, 0.4) | 0.190 | ✓ 一致 |
+| Row 319 | (1, 1, 0.95, 1, 0.6, 0.8) | 0.456 | ✓ 一致 |
+| Row 181 | (1, 1, 0.95, 0.5, 0.5, 0.3) | 0.0712 | ✓ 一致 |
 
-    ```bash
-    docker compose down -v
-    ```
+## PDER スコア体系
 
-    ---
+計測手法ごとの PDER スコア範囲。方向性特定能力の高い手法ほど高スコア。
 
-    ## 3. Quick Start (Local)
+```
+手法カテゴリ               スコア範囲    既存データでの件数
+─────────────────────────────────────────────────────
+Various tracing            0.85-0.95     200行
+Tracer study               0.80-0.95    1,094行
+Electrophys / Opto/Chemo   0.55-0.75    2,266行
+DTI / tractography         0.35-0.55      815行
+fMRI / rs-fMRI             0.30-0.50    1,500+行
+Review / Unspecified       0.20-0.40   18,159行
+Textbook                   0.15-0.35       54行
+```
 
-    ```bash
-    # Create env
-    conda create -n bdbrabuild python=3.11 -y
-    conda activate bdbrabuild
+## ライセンス
 
-    pip install -U pip wheel setuptools
-    pip install -r requirements.txt  # or: poetry install
+MIT License
 
-    cp .env.example .env
-    # configure Postgres DSN
+## 関連リソース
 
-    # Initialize DB
-    python scripts/db_migrate.py
-
-    # Import CSV (example)
-    python scripts/import_from_csv.py data/incoming/*.csv
-
-    # Launch Gradio app
-    python gradio_app.py --host 0.0.0.0 --port 7860
-    ```
-
-    ---
-
-    ## 4. Environment Variables
-
-    - `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`
-    - `APP_HOST` (default `0.0.0.0`), `APP_PORT` (default `7860`)
-    - Optional import: `GOOGLE_SHEETS_CREDENTIALS_JSON`, `SHEETS_DOC_ID`
-    - Optional scoring: `OPENAI_API_KEY`
-    - `TZ` (default `Asia/Tokyo`), `LOG_LEVEL` (default `INFO`)
-
-    ---
-
-    ## 5. Database
-
-    **Core tables** (typical):
-
-    - `circuits`: `circuit_id (PK)`, `names`, `uniform`, `subcircuit[]`, `status`
-    - `connections`: `(circuit_id, receiver_id)`, `connection_flag`, `status`
-    - `evidence`: quotes, figure pointers, `reference_id`, `status`
-    - `references_tbl`: `reference_id`, `title`, `doc_link (DOI URL)`, `bibtex_link`, `doi`, `journal_names`, `contributor`
-    - `scores`: `pder`, `dsi`, `methodscore`, `citationscore` (attached per connection)
-    - `changelog`: provenance of updates
-
-    **Migrations**
-
-    ```bash
-    python scripts/db_migrate.py
-    ```
-
-    **Seed (optional)**
-
-    ```bash
-    python scripts/seed_demo.py
-    ```
-
-    ---
-
-    ## 6. Data Import
-
-    ### CSV
-
-    ```bash
-    python scripts/import_from_csv.py data/incoming/your.csv       --table connections       --if-exists upsert
-    ```
-
-    ### Google Sheets
-
-    ```bash
-    python scripts/import_from_sheets.py --sheet "Connections"
-    ```
-
-    ---
-
-    ## 7. Gradio UI
-
-    ```bash
-    python gradio_app.py --host 0.0.0.0 --port 7860       --concurrency 4 --max-queue 64
-    ```
-
-    **Navigation**
-
-    1. Search circuits by name/abbrev
-    2. Click a *Receiver ID* to pivot
-    3. Expand *Subcircuits* to view details (connections, evidence, references, scores)
-
-    ---
-
-    ## 8. Development
-
-    - Code style: `ruff` + `black`
-    - Types: `mypy`
-    - Tests: `pytest`
-
-    ```bash
-    pip install -r requirements-dev.txt
-    ruff check .
-    black .
-    mypy .
-    pytest
-    ```
-
-    ---
-
-    ## 9. Comment Policy & i18n
-
-    All user-facing strings, docstrings, and comments are in **English**.  
-    A detector report is available at `jp_comment_report.csv`. Remaining non-English fragments should be translated before merge.
-
-    ---
-
-    ## 10. Troubleshooting
-
-    - `psycopg` connection errors → verify Postgres host/port/user/password
-    - Gradio `concurrency_count` error → use `--concurrency` (Gradio 4+)
-    - CSV width errors (e.g., `value too long for character varying(255)`) → widen columns or truncate in importer; see `migrations/*alter_columns*.sql`
-
-    ---
-
-    ## License
-
-    MIT (unless otherwise stated in subdirectories)
+- [WholeBIF-RDB プロジェクト](https://wholebif.org)（日本大学）
+- [BDBRA フォーマット仕様](https://wholebif.org/bdbra)

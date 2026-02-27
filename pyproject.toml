@@ -1,0 +1,20 @@
+[project]
+name = "wholebif-pipeline"
+version = "0.1.0"
+description = "WholeBIF-RDB data ingestion pipeline"
+requires-python = ">=3.10"
+dependencies = [
+    "requests",
+]
+
+[project.optional-dependencies]
+api = ["anthropic"]
+test = ["pytest>=7.0", "pytest-cov"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-v --tb=short"
+
+[tool.coverage.run]
+source = ["src"]
